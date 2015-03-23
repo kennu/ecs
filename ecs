@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+import subprocess
+import json
+import sys
+import os.path
+
+def get_task_definitions():
+    definitions = []
+    taskDefinitionArns = [arn for arn in json.load(subprocess.Popen('aws ecs list-task-definitions', shell=True, stdout=subprocess.PIPE).stdout)['taskDefinitionArns']]
+    uniqueArns = {}
+    for arn in taskDefinitionArns:
+        parts = arn.split(':')
+        basename = ':'.join(parts[0:-1])
+        version = int(parts[-1])
+        if uniqueArns.get(basename, None):
+          if version > uniqueArns[basename]:
+            uniqueArns[basename] = version
+        else:
+          uniqueArns[basename] = version
+    for basename, version in uniqueArns.items():
+        arn = '%s:%s' % (basename, version)
+        definition = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (arn), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+        definitions.append(definition)
+    return definitions
+
+def get_tasks():
+    taskArns = json.load(subprocess.Popen('aws ecs list-tasks', shell=True, stdout=subprocess.PIPE).stdout)
+    if taskArns['taskArns']:
+        tasks = json.load(subprocess.Popen('aws ecs describe-tasks --tasks %s' % (' '.join(taskArns['taskArns'])), shell=True, stdout=subprocess.PIPE).stdout)['tasks']
+    else:
+        tasks = []
+    for task in tasks:
+        task['taskDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+    return tasks
+
+def defs():
+    for definition in get_task_definitions():
+        print definition['family'], 'revision', definition['revision']
+        for containerDefinition in definition['containerDefinitions']:
+            #print containerDefinition.keys()
+            bindings = ''
+            mounts = ''
+            links = ''
+            for binding in containerDefinition.get('portMappings', []):
+                if bindings:
+                    bindings += ','
+                bindings += '%s->%s' % (binding['hostPort'], binding['containerPort'])
+            for mount in containerDefinition.get('mountPoints', []):
+                if mounts:
+                    mounts += ','
+                else:
+                    mounts += 'mounts '
+                mounts += '%s:%s' % (mount['sourceVolume'], mount['containerPath'])
+            for link in containerDefinition.get('links', []):
+                if links:
+                    links += ','
+                else:
+                    links += 'links '
+                links += '%s' % (link)
+            print ' - container', containerDefinition['name'], containerDefinition['image'], bindings, 'CPU', containerDefinition['cpu'], 'RAM', containerDefinition['memory'], 'MB', links, mounts
+        print
+
+def regdef():
+    if len(sys.argv) < 3:
+        print 'Usage: regdef <jsonfile>...'
+        return
+    for jsonfile in sys.argv[2:]:
+        family, ext = os.path.splitext(os.path.basename(jsonfile))
+        filename = os.path.abspath(jsonfile)
+        definition = json.load(subprocess.Popen('aws ecs register-task-definition --family %s --cli-input-json file://%s' % (family, filename), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+        print '%s:%s' % (definition['family'], definition['revision'])
+
+def tasks():
+    for task in get_tasks():
+        taskName = task['taskDefinitionArn'].split('-')[3].replace('definition/', '')
+        print task['lastStatus'], '(' + task['desiredStatus'] + ')'
+        for container in task['containers']:
+            bindings = ''
+            for binding in container.get('networkBindings', []):
+                if bindings:
+                    bindings += ', '
+                bindings += '%s:%s->%s' % (binding['bindIP'], binding['hostPort'], binding['containerPort'])
+            print ' - container', container['name'], container['lastStatus'], bindings
+        print
+
+def ps():
+    definitions = get_task_definitions()
+    tasks = get_tasks()
+    for definition in definitions:
+        task = None
+        for t in tasks:
+            if t['taskDefinitionArn'] == definition['taskDefinitionArn']:
+                task = t
+        if not task:
+            print definition['family'], 'NOTASK', 'revision', definition['revision']
+            for containerDefinition in definition['containerDefinitions']:
+                print ' - container', containerDefinition['name'], 'NOTASK', 'CPU:%s RAM:%sMB' % (containerDefinition['cpu'], containerDefinition['memory'])
+        else:
+            print definition['family'], '%s (%s)' % (task['lastStatus'], task['desiredStatus']), 'revision', definition['revision']
+            for container in task['containers']:
+                bindings = ''
+                for binding in container.get('networkBindings', []):
+                    if bindings:
+                        bindings += ', '
+                    bindings += '%s:%s->%s' % (binding['bindIP'], binding['hostPort'], binding['containerPort'])
+                resources = ''
+                for containerDefinition in definition['containerDefinitions']:
+                    if containerDefinition['name'] == container['name']:
+                        resources += 'CPU:%s RAM:%sMB' % (containerDefinition['cpu'], containerDefinition['memory'])
+                print ' - container', container['name'], container['lastStatus'], bindings, resources
+        print
+
+def run():
+    if len(sys.argv) < 3:
+        print('Usage: start <family>...')
+        return
+    for family in sys.argv[2:]:
+        found = False
+        for definition in get_task_definitions():
+            if definition['family'] == family:
+                # Found
+                print json.load(subprocess.Popen('aws ecs run-task --task-definition %s' % (definition['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)
+                found = True
+        if not found:
+            print('%s: Task family not found' % (family))
+
+def stop():
+    if len(sys.argv) < 3:
+        print('Usage: stop <family>...')
+        return
+    for family in sys.argv[2:]:
+        found = False
+        for task in get_tasks():
+            taskName = task['taskDefinitionArn'].split('-')[3].replace('definition/', '')
+            if task['taskDefinition']['family'] == family:
+                # Found it
+                print json.load(subprocess.Popen('aws ecs stop-task --task %s' % (task['taskArn']), shell=True, stdout=subprocess.PIPE).stdout)
+                found = True
+        if not found:
+            print('%s: Task family not found' % (family))
+
+def help():
+    print('Available commands:')
+    print('ps - List all defined tasks and their statuses')
+    print('defs - List task definitions')
+    print('regdef <family> <jsonfile> - Register a task definition family from a JSON file')
+    print('tasks - List running tasks')
+    print('run <family> - Run task <family>')
+    print('stop <family> - Stop task <family>')
+
+def main():
+    if len(sys.argv) < 2:
+        help()
+        return
+    globals()[sys.argv[1]]()
+
+if __name__ == '__main__':
+    main()
