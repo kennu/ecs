@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from __future__ import print_function
 import subprocess
 import json
 import sys
@@ -33,11 +34,21 @@ def get_tasks():
         task['taskDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
     return tasks
 
+def get_services():
+    serviceArns = json.load(subprocess.Popen('aws ecs list-services', shell=True, stdout=subprocess.PIPE).stdout)
+    if serviceArns['serviceArns']:
+        services = json.load(subprocess.Popen('aws ecs describe-services --services %s' % (' '.join(serviceArns['serviceArns'])), shell=True, stdout=subprocess.PIPE).stdout)['services']
+    else:
+        services = []
+    for service in services:
+        pass
+        #service['serviceDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+    return services
+
 def defs():
     for definition in get_task_definitions():
-        print definition['family'], 'revision', definition['revision']
+        print(definition['family'], 'revision', definition['revision'])
         for containerDefinition in definition['containerDefinitions']:
-            #print containerDefinition.keys()
             bindings = ''
             mounts = ''
             links = ''
@@ -57,33 +68,59 @@ def defs():
                 else:
                     links += 'links '
                 links += '%s' % (link)
-            print ' - container', containerDefinition['name'], containerDefinition['image'], bindings, 'CPU', containerDefinition['cpu'], 'RAM', containerDefinition['memory'], 'MB', links, mounts
-        print
+            print(' - container', containerDefinition['name'], containerDefinition['image'], bindings, 'CPU', containerDefinition['cpu'], 'RAM', containerDefinition['memory'], 'MB', links, mounts)
+        print()
 
 def regdef():
     if len(sys.argv) < 3:
-        print 'Usage: regdef <jsonfile>...'
+        print('Usage: regdef <jsonfile>...')
         return
     for jsonfile in sys.argv[2:]:
         family, ext = os.path.splitext(os.path.basename(jsonfile))
         filename = os.path.abspath(jsonfile)
         definition = json.load(subprocess.Popen('aws ecs register-task-definition --family %s --cli-input-json file://%s' % (family, filename), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
-        print '%s:%s' % (definition['family'], definition['revision'])
+        print('%s:%s' % (definition['family'], definition['revision']))
 
 def tasks():
     for task in get_tasks():
         taskName = task['taskDefinitionArn'].split('-')[3].replace('definition/', '')
-        print task['lastStatus'], '(' + task['desiredStatus'] + ')'
+        print(task['lastStatus'], '(' + task['desiredStatus'] + ')')
         for container in task['containers']:
             bindings = ''
             for binding in container.get('networkBindings', []):
                 if bindings:
                     bindings += ', '
                 bindings += '%s:%s->%s' % (binding['bindIP'], binding['hostPort'], binding['containerPort'])
-            print ' - container', container['name'], container['lastStatus'], bindings
-        print
+            print(' - container', container['name'], container['lastStatus'], bindings)
+        print()
 
 def ps():
+    print('SERVICE    STATUS   RUNNING PENDING DESIRED')
+    print('---------- -------- ------- ------- -------')
+    for service in get_services():
+        print('%-10s %-8s %-7s %-7s %-7s' % (service['serviceName'], service['status'], service['runningCount'], service['pendingCount'], service['desiredCount']))
+
+def scale():
+    if len(sys.argv) < 4:
+        print('Usage: scale <service> <count>')
+        return
+    name = sys.argv[2]
+    count = sys.argv[3]
+    print('SERVICE    STATUS   RUNNING PENDING DESIRED')
+    print('---------- -------- ------- ------- -------')
+    service = json.load(subprocess.Popen('aws ecs update-service --service %s --desired-count %s' % (name, count), shell=True, stdout=subprocess.PIPE).stdout)
+    if 'service' in service:
+        service = service['service']
+    while True:
+        print('\r%-10s %-8s %-7s %-7s %-7s' % (service['serviceName'], service['status'], service['runningCount'], service['pendingCount'], service['desiredCount']), end='')
+	if service['runningCount'] == service['desiredCount']:
+	    break
+        service = json.load(subprocess.Popen('aws ecs describe-services --service %s' % (name), shell=True, stdout=subprocess.PIPE).stdout)
+	if 'services' in service:
+	    service = service['services'][0]
+    print()
+
+def status():
     definitions = get_task_definitions()
     tasks = get_tasks()
     for definition in definitions:
@@ -92,11 +129,11 @@ def ps():
             if t['taskDefinitionArn'] == definition['taskDefinitionArn']:
                 task = t
         if not task:
-            print definition['family'], 'NOTASK', 'revision', definition['revision']
+            print(definition['family'], 'NOTASK', 'revision', definition['revision'])
             for containerDefinition in definition['containerDefinitions']:
-                print ' - container', containerDefinition['name'], 'NOTASK', 'CPU:%s RAM:%sMB' % (containerDefinition['cpu'], containerDefinition['memory'])
+                print(' - container', containerDefinition['name'], 'NOTASK', 'CPU:%s RAM:%sMB' % (containerDefinition['cpu'], containerDefinition['memory']))
         else:
-            print definition['family'], '%s (%s)' % (task['lastStatus'], task['desiredStatus']), 'revision', definition['revision']
+            print(definition['family'], '%s (%s)' % (task['lastStatus'], task['desiredStatus']), 'revision', definition['revision'])
             for container in task['containers']:
                 bindings = ''
                 for binding in container.get('networkBindings', []):
@@ -107,8 +144,8 @@ def ps():
                 for containerDefinition in definition['containerDefinitions']:
                     if containerDefinition['name'] == container['name']:
                         resources += 'CPU:%s RAM:%sMB' % (containerDefinition['cpu'], containerDefinition['memory'])
-                print ' - container', container['name'], container['lastStatus'], bindings, resources
-        print
+                print(' - container', container['name'], container['lastStatus'], bindings, resources)
+        print()
 
 def run():
     if len(sys.argv) < 3:
@@ -119,7 +156,7 @@ def run():
         for definition in get_task_definitions():
             if definition['family'] == family:
                 # Found
-                print json.load(subprocess.Popen('aws ecs run-task --task-definition %s' % (definition['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)
+                print(json.load(subprocess.Popen('aws ecs run-task --task-definition %s' % (definition['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout))
                 found = True
         if not found:
             print('%s: Task family not found' % (family))
@@ -134,17 +171,19 @@ def stop():
             taskName = task['taskDefinitionArn'].split('-')[3].replace('definition/', '')
             if task['taskDefinition']['family'] == family:
                 # Found it
-                print json.load(subprocess.Popen('aws ecs stop-task --task %s' % (task['taskArn']), shell=True, stdout=subprocess.PIPE).stdout)
+                print(json.load(subprocess.Popen('aws ecs stop-task --task %s' % (task['taskArn']), shell=True, stdout=subprocess.PIPE).stdout))
                 found = True
         if not found:
             print('%s: Task family not found' % (family))
 
 def help():
     print('Available commands:')
-    print('ps - List all defined tasks and their statuses')
+    print('status - List all defined tasks and their statuses')
     print('defs - List task definitions')
     print('regdef <family> <jsonfile> - Register a task definition family from a JSON file')
     print('tasks - List running tasks')
+    print('ps - List services and their status')
+    print('scale <service> <count> - Scale service up/down')
     print('run <family> - Run task <family>')
     print('stop <family> - Stop task <family>')
 
