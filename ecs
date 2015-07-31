@@ -25,21 +25,35 @@ def get_task_definitions():
     return definitions
 
 def get_tasks():
+    tasks = []
     taskArns = json.load(subprocess.Popen('aws ecs list-tasks', shell=True, stdout=subprocess.PIPE).stdout)
     if taskArns['taskArns']:
-        tasks = json.load(subprocess.Popen('aws ecs describe-tasks --tasks %s' % (' '.join(taskArns['taskArns'])), shell=True, stdout=subprocess.PIPE).stdout)['tasks']
-    else:
-        tasks = []
+        arns = taskArns['taskArns']
+	batches = []
+	while len(arns) > 10:
+	    batches.append(arns[:10])
+	    arns = arns[10:]
+	if len(arns) > 1:
+	    batches.append(arns)
+	for batch in batches:
+            tasks += json.load(subprocess.Popen('aws ecs describe-tasks --tasks %s' % (' '.join(batch)), shell=True, stdout=subprocess.PIPE).stdout)['tasks']
     for task in tasks:
         task['taskDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
     return tasks
 
 def get_services():
+    services = []
     serviceArns = json.load(subprocess.Popen('aws ecs list-services', shell=True, stdout=subprocess.PIPE).stdout)
     if serviceArns['serviceArns']:
-        services = json.load(subprocess.Popen('aws ecs describe-services --services %s' % (' '.join(serviceArns['serviceArns'])), shell=True, stdout=subprocess.PIPE).stdout)['services']
-    else:
-        services = []
+        arns = serviceArns['serviceArns']
+	batches = []
+	while len(arns) > 10:
+	    batches.append(arns[:10])
+	    arns = arns[10:]
+	if len(arns) > 1:
+	    batches.append(arns)
+	for batch in batches:
+            services += json.load(subprocess.Popen('aws ecs describe-services --services %s' % (' '.join(batch)), shell=True, stdout=subprocess.PIPE).stdout)['services']
     for service in services:
         pass
         #service['serviceDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
