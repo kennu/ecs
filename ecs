@@ -3,11 +3,16 @@ from __future__ import print_function
 import subprocess
 import json
 import sys
+import os
 import os.path
+
+
+ECS_CLUSTER = os.environ.get('ECS_CLUSTER', 'default')
+ECS_CMD = 'aws ecs %s --cluster ' + ECS_CLUSTER
 
 def get_task_definitions():
     definitions = []
-    taskDefinitionArns = [arn for arn in json.load(subprocess.Popen('aws ecs list-task-definitions', shell=True, stdout=subprocess.PIPE).stdout)['taskDefinitionArns']]
+    taskDefinitionArns = [arn for arn in json.load(subprocess.Popen(ECS_CMD % 'list-task-definitions', shell=True, stdout=subprocess.PIPE).stdout)['taskDefinitionArns']]
     uniqueArns = {}
     for arn in taskDefinitionArns:
         parts = arn.split(':')
@@ -20,29 +25,29 @@ def get_task_definitions():
           uniqueArns[basename] = version
     for basename, version in uniqueArns.items():
         arn = '%s:%s' % (basename, version)
-        definition = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (arn), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+        definition = json.load(subprocess.Popen((ECS_CMD % 'describe-task-definition') + ' --task %s' % (arn), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
         definitions.append(definition)
     return definitions
 
 def get_tasks():
-    taskArns = json.load(subprocess.Popen('aws ecs list-tasks', shell=True, stdout=subprocess.PIPE).stdout)
+    taskArns = json.load(subprocess.Popen(ECS_CMD % 'list-tasks', shell=True, stdout=subprocess.PIPE).stdout)
     if taskArns['taskArns']:
-        tasks = json.load(subprocess.Popen('aws ecs describe-tasks --tasks %s' % (' '.join(taskArns['taskArns'])), shell=True, stdout=subprocess.PIPE).stdout)['tasks']
+        tasks = json.load(subprocess.Popen((ECS_CMD % 'describe-tasks') + ' --tasks %s' % (' '.join(taskArns['taskArns'])), shell=True, stdout=subprocess.PIPE).stdout)['tasks']
     else:
         tasks = []
     for task in tasks:
-        task['taskDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+        task['taskDefinition'] = json.load(subprocess.Popen((ECS_CMD % 'describe-task-definition') + ' --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
     return tasks
 
 def get_services():
-    serviceArns = json.load(subprocess.Popen('aws ecs list-services', shell=True, stdout=subprocess.PIPE).stdout)
+    serviceArns = json.load(subprocess.Popen(ECS_CMD % 'list-services', shell=True, stdout=subprocess.PIPE).stdout)
     if serviceArns['serviceArns']:
-        services = json.load(subprocess.Popen('aws ecs describe-services --services %s' % (' '.join(serviceArns['serviceArns'])), shell=True, stdout=subprocess.PIPE).stdout)['services']
+        services = json.load(subprocess.Popen((ECS_CMD % 'describe-services') + ' --services %s' % (' '.join(serviceArns['serviceArns'])), shell=True, stdout=subprocess.PIPE).stdout)['services']
     else:
         services = []
     for service in services:
         pass
-        #service['serviceDefinition'] = json.load(subprocess.Popen('aws ecs describe-task-definition --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+        #service['serviceDefinition'] = json.load(subprocess.Popen((ECS_CMD % 'describe-task-definition') + ' --task %s' % (task['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
     return services
 
 def defs():
@@ -78,7 +83,7 @@ def regdef():
     for jsonfile in sys.argv[2:]:
         family, ext = os.path.splitext(os.path.basename(jsonfile))
         filename = os.path.abspath(jsonfile)
-        definition = json.load(subprocess.Popen('aws ecs register-task-definition --family %s --cli-input-json file://%s' % (family, filename), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
+        definition = json.load(subprocess.Popen((ECS_CMD % 'register-task-definition') + ' --family %s --cli-input-json file://%s' % (family, filename), shell=True, stdout=subprocess.PIPE).stdout)['taskDefinition']
         print('%s:%s' % (definition['family'], definition['revision']))
 
 def tasks():
@@ -95,10 +100,10 @@ def tasks():
         print()
 
 def ps():
-    print('SERVICE    STATUS   RUNNING PENDING DESIRED')
-    print('---------- -------- ------- ------- -------')
+    print('SERVICE                   STATUS   RUNNING PENDING DESIRED')
+    print('------------------------- -------- ------- ------- -------')
     for service in get_services():
-        print('%-10s %-8s %-7s %-7s %-7s' % (service['serviceName'], service['status'], service['runningCount'], service['pendingCount'], service['desiredCount']))
+        print('%-25s %-8s %-7s %-7s %-7s' % (service['serviceName'], service['status'], service['runningCount'], service['pendingCount'], service['desiredCount']))
 
 def scale():
     if len(sys.argv) < 4:
@@ -106,16 +111,16 @@ def scale():
         return
     name = sys.argv[2]
     count = sys.argv[3]
-    print('SERVICE    STATUS   RUNNING PENDING DESIRED')
-    print('---------- -------- ------- ------- -------')
-    service = json.load(subprocess.Popen('aws ecs update-service --service %s --desired-count %s' % (name, count), shell=True, stdout=subprocess.PIPE).stdout)
+    print('SERVICE                   STATUS   RUNNING PENDING DESIRED')
+    print('------------------------- -------- ------- ------- -------')
+    service = json.load(subprocess.Popen((ECS_CMD % 'update-service') + ' --service %s --desired-count %s' % (name, count), shell=True, stdout=subprocess.PIPE).stdout)
     if 'service' in service:
         service = service['service']
     while True:
-        print('\r%-10s %-8s %-7s %-7s %-7s' % (service['serviceName'], service['status'], service['runningCount'], service['pendingCount'], service['desiredCount']), end='')
+        print('\r%-25s %-8s %-7s %-7s %-7s' % (service['serviceName'], service['status'], service['runningCount'], service['pendingCount'], service['desiredCount']), end='')
 	if service['runningCount'] == service['desiredCount']:
 	    break
-        service = json.load(subprocess.Popen('aws ecs describe-services --service %s' % (name), shell=True, stdout=subprocess.PIPE).stdout)
+        service = json.load(subprocess.Popen((ECS_CMD % 'describe-services') + ' --service %s' % (name), shell=True, stdout=subprocess.PIPE).stdout)
 	if 'services' in service:
 	    service = service['services'][0]
     print()
@@ -156,7 +161,7 @@ def run():
         for definition in get_task_definitions():
             if definition['family'] == family:
                 # Found
-                print(json.load(subprocess.Popen('aws ecs run-task --task-definition %s' % (definition['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout))
+                print(json.load(subprocess.Popen((ECS_CMD % 'run-task') + ' --task-definition %s' % (definition['taskDefinitionArn']), shell=True, stdout=subprocess.PIPE).stdout))
                 found = True
         if not found:
             print('%s: Task family not found' % (family))
@@ -171,7 +176,7 @@ def stop():
             taskName = task['taskDefinitionArn'].split('-')[3].replace('definition/', '')
             if task['taskDefinition']['family'] == family:
                 # Found it
-                print(json.load(subprocess.Popen('aws ecs stop-task --task %s' % (task['taskArn']), shell=True, stdout=subprocess.PIPE).stdout))
+                print(json.load(subprocess.Popen((ECS_CMD % 'stop-task') + ' --task %s' % (task['taskArn']), shell=True, stdout=subprocess.PIPE).stdout))
                 found = True
         if not found:
             print('%s: Task family not found' % (family))
